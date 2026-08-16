@@ -2,6 +2,11 @@ import { defineConfig } from 'prisma/config';
 
 export default defineConfig({
   schema: 'prisma/schema.prisma',
-  // Seed command invoked by `prisma db seed` and `prisma migrate reset`
-  seed: 'tsx prisma/seed.ts',
+  engine: 'classic',
+  datasource: {
+    url: process.env.DATABASE_URL!,
+  },
+  migrations: {
+    seed: 'tsx prisma/seed.ts',
+  },
 });

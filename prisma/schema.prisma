@@ -8,7 +8,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -84,12 +83,13 @@ model User {
   createdAt    DateTime @default(now()) @db.Timestamptz()
   updatedAt    DateTime @updatedAt @db.Timestamptz()
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id])
-  chats     Chat[]
-  executions Execution[]
-  memories  Memory[]
-  documents Document[]
-  approvals Approval[]
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  chats         Chat[]
+  executions    Execution[]
+  memories      Memory[]
+  documents     Document[]
+  approvals     Approval[]
+  refreshTokens RefreshToken[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -331,6 +331,26 @@ model Memory {
   @@index([tenantId, chatId, kind])
   @@index([tenantId, key])
   @@map("Memory")
+}
+
+// ─── RefreshToken ─────────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  familyId  String    @db.Uuid
+  expiresAt DateTime  @db.Timestamptz()
+  revokedAt DateTime? @db.Timestamptz()
+  userAgent String?
+  ipHash    String?
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@map("RefreshToken")
 }
 
 // ─── Embedding ────────────────────────────────────────────────────────────────

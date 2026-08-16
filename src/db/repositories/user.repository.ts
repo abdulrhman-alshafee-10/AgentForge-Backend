@@ -62,6 +62,15 @@ export class UserRepository extends BaseRepository {
     await this.db.user.findFirstOrThrow({ where: { id, tenantId } });
     return this.db.user.delete({ where: { id } });
   }
+
+  /**
+   * Find by primary key WITHOUT tenant scoping.
+   * Use only in internal auth flows where the userId was obtained from a
+   * trusted source (e.g. a verified refresh token row in the DB).
+   */
+  findByIdUnsafe(id: string): Promise<User | null> {
+    return this.db.user.findUnique({ where: { id } });
+  }
 }
 
 // Singleton instance

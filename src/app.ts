@@ -8,6 +8,7 @@ import { logger } from './common/logger/logger.js';
 import { correlationId } from './common/middleware/correlation-id.js';
 import { notFound } from './common/middleware/not-found.js';
 import { errorHandler } from './common/middleware/error-handler.js';
+import { authenticate } from './common/middleware/authenticate.js';
 
 // ── Routers ───────────────────────────────────────────────────────────────────
 import { healthRouter } from './modules/health/health.routes.js';
@@ -82,8 +83,13 @@ export function createApp(): express.Application {
   // ── 6. API v1 routers ────────────────────────────────────────────────────
   const v1 = express.Router();
 
+  // Public routes — no authentication required
   v1.use('/health', healthRouter);
   v1.use('/auth', authRouter);
+
+  // Apply authentication to all remaining /api/v1/* routes
+  v1.use(authenticate());
+
   v1.use('/users', usersRouter);
   v1.use('/chats', chatsRouter);
   v1.use('/messages', messagesRouter);
