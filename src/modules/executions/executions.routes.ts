@@ -5,6 +5,9 @@ import { chatOwnership } from '../../common/middleware/chat-ownership.js';
 import { PaginationSchema } from '../../common/utils/pagination.js';
 import { executionsService } from './executions.service.js';
 
+import { executionOwnership } from '../../common/middleware/execution-ownership.js';
+import { eventsService } from './events.service.js';
+
 const router = Router({ mergeParams: true });
 
 /**
@@ -12,13 +15,23 @@ const router = Router({ mergeParams: true });
  */
 router.get(
   '/:executionId',
+  executionOwnership(),
   wrap(async (req: Request, res: Response) => {
-    const execution = await executionsService.getExecution(
-      req.params.executionId,
-      req.user!.tenantId,
-      req.user!.id,
-    );
-    res.json({ execution });
+    res.json({ execution: req.execution });
+  })
+);
+
+/**
+ * GET /executions/:executionId/events
+ */
+router.get(
+  '/:executionId/events',
+  executionOwnership(),
+  validate({ query: PaginationSchema }),
+  wrap(async (req: Request, res: Response) => {
+    const { cursor, limit } = req.query as any;
+    const result = await eventsService.getEvents(req.params.executionId, limit, cursor);
+    res.json(result);
   })
 );
 

@@ -24,6 +24,9 @@ const EnvSchema = z.object({
   // Database (Phase 02)
   DATABASE_URL: z.string().url('DATABASE_URL must be a valid PostgreSQL URL'),
 
+  // Redis (Phase 05)
+  REDIS_URL: z.string().url('REDIS_URL must be a valid Redis URL'),
+
   // JWT (Phase 03)
   JWT_ACCESS_SECRET: z
     .string()

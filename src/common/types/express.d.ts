@@ -14,6 +14,8 @@ declare global {
       correlationId: string;
       /** Set by the chatOwnership middleware. */
       chat?: import('@prisma/client').Chat;
+      /** Set by the executionOwnership middleware. */
+      execution?: import('@prisma/client').Execution;
     }
   }
 }
