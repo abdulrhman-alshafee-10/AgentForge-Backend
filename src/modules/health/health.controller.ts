@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { prisma } from '../../db/prisma.js';
 
 // ─── Health controller ────────────────────────────────────────────────────────
 
@@ -15,9 +16,24 @@ export function live(_req: Request, res: Response): void {
 /**
  * GET /api/v1/health/ready
  *
- * Readiness probe: the process can serve traffic (dependencies are up).
- * Phase 01: always 200. Phases 02+ will ping the DB and Redis.
+ * Readiness probe: all dependencies are reachable.
+ * Pings PostgreSQL via Prisma. Returns 503 if the DB is down.
  */
-export function ready(_req: Request, res: Response): void {
-  res.status(200).json({ status: 'ok', checks: {} });
+export async function ready(_req: Request, res: Response): Promise<void> {
+  const checks: Record<string, 'ok' | 'error'> = {};
+
+  // ── Database check ───────────────────────────────────────────────────────
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'error';
+  }
+
+  const allOk = Object.values(checks).every((v) => v === 'ok');
+
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'ok' : 'degraded',
+    checks,
+  });
 }

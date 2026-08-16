@@ -1,0 +1,357 @@
+// ─── Prisma Schema ────────────────────────────────────────────────────────────
+// AgentForge — Phase 02
+// Full schema matching docs/database.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum ExecutionStatus {
+  CREATED
+  QUEUED
+  RUNNING
+  THINKING
+  WAITING_FOR_USER
+  WAITING_FOR_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ToolCallStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  ERROR
+  CANCELLED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+  tool
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  INDEXED
+  FAILED
+}
+
+// ─── Tenant ───────────────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  plan      String   @default("free")
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now()) @db.Timestamptz()
+  updatedAt DateTime @updatedAt @db.Timestamptz()
+
+  users     User[]
+  agents    Agent[]
+  documents Document[]
+
+  @@map("Tenant")
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  email        String
+  passwordHash String
+  displayName  String
+  role         String   @default("member")
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @db.Timestamptz()
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  chats     Chat[]
+  executions Execution[]
+  memories  Memory[]
+  documents Document[]
+  approvals Approval[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("User")
+}
+
+// ─── Agent ────────────────────────────────────────────────────────────────────
+
+model Agent {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String?  @db.Uuid
+  name            String
+  description     String   @default("")
+  systemPrompt    String   @default("")
+  model           String   @default("gpt-4o")
+  temperature     Decimal  @default(0.7) @db.Decimal(4, 3)
+  tools           String[]
+  workflowVersion String   @default("v1")
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @db.Timestamptz()
+
+  tenant     Tenant?     @relation(fields: [tenantId], references: [id])
+  chats      Chat[]
+  executions Execution[]
+
+  @@unique([tenantId, name])
+  @@map("Agent")
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+
+model Chat {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  userId     String    @db.Uuid
+  agentId    String    @db.Uuid
+  title      String    @default("New Chat")
+  archivedAt DateTime? @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @db.Timestamptz()
+  updatedAt  DateTime  @updatedAt @db.Timestamptz()
+
+  user       User        @relation(fields: [userId], references: [id])
+  agent      Agent       @relation(fields: [agentId], references: [id])
+  messages   Message[]
+  executions Execution[]
+  memories   Memory[]
+
+  @@index([tenantId, userId, updatedAt(sort: Desc)])
+  @@index([tenantId, archivedAt])
+  @@map("Chat")
+}
+
+// ─── Message ──────────────────────────────────────────────────────────────────
+
+model Message {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @db.Uuid
+  chatId      String      @db.Uuid
+  executionId String?     @db.Uuid
+  role        MessageRole
+  content     String      @default("")
+  metadata    Json        @default("{}")
+  createdAt   DateTime    @default(now()) @db.Timestamptz()
+
+  chat      Chat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  execution Execution? @relation("ExecutionMessages", fields: [executionId], references: [id])
+
+  inputForExecution  Execution? @relation("ExecutionInputMessage")
+  outputForExecution Execution? @relation("ExecutionOutputMessage")
+
+  @@index([chatId, createdAt])
+  @@index([tenantId])
+  @@map("Message")
+}
+
+// ─── Execution ────────────────────────────────────────────────────────────────
+
+model Execution {
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @db.Uuid
+  chatId          String          @db.Uuid
+  userId          String          @db.Uuid
+  agentId         String          @db.Uuid
+  workflowVersion String          @default("v1")
+  status          ExecutionStatus @default(CREATED)
+  inputMessageId  String          @unique @db.Uuid
+  outputMessageId String?         @unique @db.Uuid
+  error           Json?
+  startedAt       DateTime?       @db.Timestamptz()
+  finishedAt      DateTime?       @db.Timestamptz()
+  createdAt       DateTime        @default(now()) @db.Timestamptz()
+  updatedAt       DateTime        @updatedAt @db.Timestamptz()
+
+  chat          Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id])
+  agent         Agent     @relation(fields: [agentId], references: [id])
+  inputMessage  Message   @relation("ExecutionInputMessage", fields: [inputMessageId], references: [id])
+  outputMessage Message?  @relation("ExecutionOutputMessage", fields: [outputMessageId], references: [id])
+
+  messages    Message[]    @relation("ExecutionMessages")
+  events      Event[]
+  checkpoints Checkpoint[]
+  toolCalls   ToolCall[]
+  approvals   Approval[]
+
+  @@index([tenantId, chatId, createdAt(sort: Desc)])
+  @@index([status, updatedAt])
+  @@map("Execution")
+}
+
+// ─── Event ────────────────────────────────────────────────────────────────────
+
+model Event {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  executionId String   @db.Uuid
+  sequence    BigInt
+  type        String
+  payload     Json     @default("{}")
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+
+  execution Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, sequence])
+  @@index([tenantId, executionId, createdAt])
+  @@map("Event")
+}
+
+// ─── Checkpoint ───────────────────────────────────────────────────────────────
+
+model Checkpoint {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String   @db.Uuid
+  executionId        String   @db.Uuid
+  nodeName           String
+  state              Json
+  parentCheckpointId String?  @db.Uuid
+  createdAt          DateTime @default(now()) @db.Timestamptz()
+
+  execution        Execution   @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  parentCheckpoint Checkpoint? @relation("CheckpointParent", fields: [parentCheckpointId], references: [id])
+  childCheckpoints Checkpoint[] @relation("CheckpointParent")
+
+  @@index([executionId, createdAt(sort: Desc)])
+  @@index([tenantId, executionId])
+  @@map("Checkpoint")
+}
+
+// ─── ToolCall ─────────────────────────────────────────────────────────────────
+
+model ToolCall {
+  id          String         @id @default(uuid()) @db.Uuid
+  tenantId    String         @db.Uuid
+  executionId String         @db.Uuid
+  toolName    String
+  input       Json
+  output      Json?
+  status      ToolCallStatus @default(PENDING)
+  error       Json?
+  startedAt   DateTime?      @db.Timestamptz()
+  finishedAt  DateTime?      @db.Timestamptz()
+  createdAt   DateTime       @default(now()) @db.Timestamptz()
+
+  execution Execution  @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  approval  Approval?
+
+  @@index([executionId, createdAt])
+  @@index([tenantId, toolName, status])
+  @@map("ToolCall")
+}
+
+// ─── Approval ─────────────────────────────────────────────────────────────────
+
+model Approval {
+  id          String         @id @default(uuid()) @db.Uuid
+  tenantId    String         @db.Uuid
+  executionId String         @db.Uuid
+  toolCallId  String?        @unique @db.Uuid
+  reason      String
+  payload     Json
+  status      ApprovalStatus @default(PENDING)
+  decidedBy   String?        @db.Uuid
+  decidedAt   DateTime?      @db.Timestamptz()
+  expiresAt   DateTime?      @db.Timestamptz()
+  createdAt   DateTime       @default(now()) @db.Timestamptz()
+
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  toolCall    ToolCall? @relation(fields: [toolCallId], references: [id])
+  decidedByUser User?   @relation(fields: [decidedBy], references: [id])
+
+  @@index([executionId, status])
+  @@index([tenantId, status, createdAt])
+  @@map("Approval")
+}
+
+// ─── Document ─────────────────────────────────────────────────────────────────
+
+model Document {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  userId     String         @db.Uuid
+  title      String
+  mimeType   String
+  sizeBytes  BigInt
+  storageKey String
+  status     DocumentStatus @default(UPLOADED)
+  createdAt  DateTime       @default(now()) @db.Timestamptz()
+  updatedAt  DateTime       @updatedAt @db.Timestamptz()
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  user       User        @relation(fields: [userId], references: [id])
+  embeddings Embedding[]
+
+  @@index([tenantId, userId, createdAt(sort: Desc)])
+  @@index([tenantId, status])
+  @@map("Document")
+}
+
+// ─── Memory ───────────────────────────────────────────────────────────────────
+
+model Memory {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  userId      String?  @db.Uuid
+  chatId      String?  @db.Uuid
+  kind        String
+  key         String?
+  content     String
+  embeddingId String?  @unique @db.Uuid
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @db.Timestamptz()
+
+  user      User?      @relation(fields: [userId], references: [id])
+  chat      Chat?      @relation(fields: [chatId], references: [id])
+  embedding Embedding? @relation(fields: [embeddingId], references: [id])
+
+  @@index([tenantId, userId, kind])
+  @@index([tenantId, chatId, kind])
+  @@index([tenantId, key])
+  @@map("Memory")
+}
+
+// ─── Embedding ────────────────────────────────────────────────────────────────
+// The `embedding` vector column is managed via a raw migration because
+// Prisma does not natively support pgvector's VECTOR type yet.
+// We declare it as Unsupported so Prisma still generates the model type.
+
+model Embedding {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  documentId String?  @db.Uuid
+  memoryId   String?  @db.Uuid
+  chunkIndex Int
+  content    String
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now()) @db.Timestamptz()
+
+  document Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  memory   Memory?
+
+  @@index([tenantId, documentId, chunkIndex])
+  @@map("Embedding")
+}

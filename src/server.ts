@@ -2,6 +2,7 @@ import http from 'http';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './common/logger/logger.js';
+import { prisma } from './db/prisma.js';
 
 // ─── Server entry point ───────────────────────────────────────────────────────
 //
@@ -38,8 +39,16 @@ function shutdown(signal: string): void {
       logger.error({ err }, 'Error during server close');
       process.exit(1);
     }
-    logger.info('Server closed cleanly');
-    process.exit(0);
+
+    // Disconnect Prisma before exiting
+    prisma.$disconnect().then(() => {
+      logger.info('Prisma disconnected');
+      logger.info('Server closed cleanly');
+      process.exit(0);
+    }).catch((disconnectErr: unknown) => {
+      logger.error({ err: disconnectErr }, 'Error disconnecting Prisma');
+      process.exit(1);
+    });
   });
 
   // Force-exit if connections are not drained in time

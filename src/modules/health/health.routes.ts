@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { wrap } from '../../common/utils/async-wrap.js';
 import { live, ready } from './health.controller.js';
 
 // ─── Health router ────────────────────────────────────────────────────────────
@@ -8,6 +9,6 @@ import { live, ready } from './health.controller.js';
 const router = Router();
 
 router.get('/live', live);
-router.get('/ready', ready);
+router.get('/ready', wrap(ready));
 
 export { router as healthRouter };

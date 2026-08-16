@@ -20,6 +20,9 @@ const EnvSchema = z.object({
 
   // Graceful shutdown: how long to wait for in-flight requests (ms)
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).default(10_000),
+
+  // Database (Phase 02)
+  DATABASE_URL: z.string().url('DATABASE_URL must be a valid PostgreSQL URL'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
