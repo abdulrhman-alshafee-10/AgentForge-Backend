@@ -375,3 +375,14 @@ model Embedding {
   @@index([tenantId, documentId, chunkIndex])
   @@map("Embedding")
 }
+
+// ─── IdempotencyKey ───────────────────────────────────────────────────────────
+
+model IdempotencyKey {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  response  Json
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  @@map("IdempotencyKey")
+}

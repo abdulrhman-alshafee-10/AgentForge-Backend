@@ -12,6 +12,8 @@ declare global {
       user?: AuthUser;
       /** Set by the correlation-id middleware on every request. */
       correlationId: string;
+      /** Set by the chatOwnership middleware. */
+      chat?: import('@prisma/client').Chat;
     }
   }
 }
