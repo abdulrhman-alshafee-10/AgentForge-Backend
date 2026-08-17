@@ -57,6 +57,7 @@ export const CHECKPOINT_NODES = new Set([
   'act',
   'observe',
   'respond',
+  'WAITING_FOR_APPROVAL',
 ]);
 
 // ─── Nodes kept during pruning ────────────────────────────────────────────────

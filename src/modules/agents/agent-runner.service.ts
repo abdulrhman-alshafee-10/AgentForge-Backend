@@ -2,8 +2,9 @@ import { prisma } from '../../db/prisma.js';
 import { eventsService } from '../executions/events.service.js';
 import { cancellationService } from '../executions/cancellation.service.js';
 import { checkpointService } from '../checkpoints/checkpoint.service.js';
-import { buildResearchV1Graph, NODE } from '../workflows/research-v1.graph.js';
+import { buildResearchV1Graph } from '../workflows/research-v1.graph.js';
 import { createInitialState } from '../workflows/workflow.types.js';
+import { ApprovalRequiredError } from '../workflows/nodes/act.node.js';
 import { MessageRole, ExecutionStatus } from '@prisma/client';
 import { logger } from '../../common/logger/logger.js';
 import type { AgentState } from '../workflows/workflow.types.js';
@@ -36,9 +37,8 @@ export class AgentRunnerService {
     const { tenantId, chatId, userId, agentId, agent, inputMessage } = execution;
 
     // ── 2. Check if already processed ─────────────────────────────────────
-    // Allow RUNNING too — that means a previous worker attempt was interrupted.
-    // We'll resume from the latest checkpoint.
-    const isResumable = ['CREATED', 'RUNNING'].includes(execution.status);
+    // Allow RUNNING and WAITING_FOR_APPROVAL — both can be resumed.
+    const isResumable = ['CREATED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(execution.status);
     if (!isResumable) {
       logger.warn(
         { executionId, status: execution.status },
@@ -203,6 +203,19 @@ export class AgentRunnerService {
     } catch (err: any) {
       if (err instanceof ExecutionCancelledError) {
         await this.handleCancel(executionId, tenantId, chatId);
+        throw err;
+      }
+
+      // Approval pause: the act node needs human sign-off.
+      // Save a checkpoint (already done by stream loop above the throw),
+      // update execution status, and release the worker without retrying.
+      if (err instanceof ApprovalRequiredError) {
+        logger.info(
+          { executionId, approvalId: err.approvalId },
+          'AgentRunner: paused for approval — releasing worker',
+        );
+        // Status transition and event already done inside approvalService.createApproval().
+        // BullMQ should NOT retry this — mark as non-retryable by re-throwing.
         throw err;
       }
 

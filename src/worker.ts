@@ -4,6 +4,7 @@ import { redis } from './redis/redis.js';
 import { env } from './config/env.js';
 import { registerTools } from './modules/tools/tools.register.js';
 import { createExecutionWorker } from './queues/execution.worker.js';
+import { approvalService } from './modules/approvals/approval.service.js';
 
 // ─── Worker entry point ───────────────────────────────────────────────────────
 //
@@ -29,6 +30,17 @@ logger.info(
   'AgentForge worker started',
 );
 
+// ── Approval expiry sweeper ───────────────────────────────────────────────────
+// Runs every 60 seconds; marks stale PENDING approvals as EXPIRED and
+// enqueues resume jobs so paused executions don't get stuck.
+const expirySweeper = setInterval(async () => {
+  try {
+    await approvalService.expireStale();
+  } catch (err) {
+    logger.error({ err }, 'Worker: approval expiry sweep failed');
+  }
+}, 60_000);
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 //
 // On SIGTERM / SIGINT:
@@ -38,6 +50,8 @@ logger.info(
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Worker: shutdown signal received');
+
+  clearInterval(expirySweeper);
 
   try {
     // Stop accepting new jobs; wait for current job to finish (up to 30 s)
