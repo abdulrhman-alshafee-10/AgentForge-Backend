@@ -27,6 +27,10 @@ const EnvSchema = z.object({
   // Redis (Phase 05)
   REDIS_URL: z.string().url('REDIS_URL must be a valid Redis URL'),
 
+  // RAG (Phase 06)
+  OLLAMA_API_KEY: z.string().min(1, 'OLLAMA_API_KEY is required'),
+  STORAGE_PATH: z.string().default('./storage/documents'),
+
   // JWT (Phase 03)
   JWT_ACCESS_SECRET: z
     .string()

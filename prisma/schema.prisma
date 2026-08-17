@@ -8,6 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -365,7 +366,7 @@ model Embedding {
   memoryId   String?  @db.Uuid
   chunkIndex Int
   content    String
-  embedding  Unsupported("vector(1536)")?
+  embedding  Unsupported("vector(768)")?
   metadata   Json     @default("{}")
   createdAt  DateTime @default(now()) @db.Timestamptz()
 

@@ -89,7 +89,7 @@ router.patch(
     if (title !== undefined) updates.title = title;
     if (archivedAt !== undefined) updates.archivedAt = archivedAt ? new Date(archivedAt) : null;
     
-    const chat = await chatsService.updateChat(req.params.chatId, updates);
+    const chat = await chatsService.updateChat(req.params.chatId as string, updates);
     res.json({ chat });
   }),
 );
@@ -102,7 +102,7 @@ router.delete(
   '/:chatId',
   chatOwnership(),
   wrap(async (req: Request, res: Response) => {
-    await chatsService.deleteChat(req.params.chatId);
+    await chatsService.deleteChat(req.params.chatId as string);
     res.status(204).send();
   }),
 );
@@ -115,7 +115,7 @@ router.post(
   '/:chatId/reopen',
   chatOwnership(),
   wrap(async (req: Request, res: Response) => {
-    const chat = await chatsService.reopenChat(req.params.chatId);
+    const chat = await chatsService.reopenChat(req.params.chatId as string);
     res.json({ chat });
   }),
 );

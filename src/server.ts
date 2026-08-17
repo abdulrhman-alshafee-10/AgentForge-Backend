@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './common/logger/logger.js';
 import { prisma } from './db/prisma.js';
+import { redis } from './redis/redis.js';
 
 // ─── Server entry point ───────────────────────────────────────────────────────
 //
@@ -40,13 +41,16 @@ function shutdown(signal: string): void {
       process.exit(1);
     }
 
-    // Disconnect Prisma before exiting
+    // Disconnect Prisma and Redis before exiting
     prisma.$disconnect().then(() => {
       logger.info('Prisma disconnected');
+      return redis.quit();
+    }).then(() => {
+      logger.info('Redis disconnected');
       logger.info('Server closed cleanly');
       process.exit(0);
     }).catch((disconnectErr: unknown) => {
-      logger.error({ err: disconnectErr }, 'Error disconnecting Prisma');
+      logger.error({ err: disconnectErr }, 'Error during shutdown cleanup');
       process.exit(1);
     });
   });

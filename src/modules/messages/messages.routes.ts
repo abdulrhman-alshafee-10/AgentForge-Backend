@@ -55,7 +55,7 @@ router.get(
   validate({ query: PaginationSchema }),
   wrap(async (req: Request, res: Response) => {
     const { cursor, limit } = req.query as any;
-    const result = await messagesService.listMessages(req.params.chatId, limit, cursor);
+    const result = await messagesService.listMessages(req.params.chatId as string, limit, cursor);
     res.json(result);
   })
 );

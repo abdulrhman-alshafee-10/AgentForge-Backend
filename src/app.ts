@@ -93,13 +93,15 @@ export function createApp(): express.Application {
   v1.use('/users', usersRouter);
   v1.use('/chats', chatsRouter);
   v1.use('/messages', messagesRouter);
+  // executionsRouter handles both GET /executions/:id, GET /executions/:id/events,
+  // and GET /executions/:id/stream (SSE). All live under /executions.
   v1.use('/executions', executionsRouter);
+  v1.use('/executions', streamingRouter);
   v1.use('/agents', agentsRouter);
   v1.use('/tools', toolsRouter);
   v1.use('/workflows', workflowsRouter);
   v1.use('/memory', memoryRouter);
   v1.use('/documents', documentsRouter);
-  v1.use('/stream', streamingRouter);
   v1.use('/checkpoints', checkpointsRouter);
   v1.use('/approvals', approvalsRouter);
   v1.use('/tenants', tenantsRouter);
