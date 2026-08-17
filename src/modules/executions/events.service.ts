@@ -1,6 +1,6 @@
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../redis/redis.js';
-import { paginate, encodeCursor, decodeCursor } from '../../common/utils/pagination.js';
+import { paginate, decodeCursor } from '../../common/utils/pagination.js';
 import type { Prisma, Event } from '@prisma/client';
 
 // ─── Serialisable event shape ──────────────────────────────────────────────────

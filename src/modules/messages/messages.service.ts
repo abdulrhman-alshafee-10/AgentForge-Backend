@@ -1,9 +1,9 @@
 import { messagesRepository } from './messages.repository.js';
-import { executionsRepository } from '../executions/executions.repository.js';
 import { paginate, decodeCursor } from '../../common/utils/pagination.js';
 import { prisma } from '../../db/prisma.js';
-import { AppError } from '../../common/errors/AppError.js';
 import { ExecutionStatus, MessageRole } from '@prisma/client';
+import { agentRunnerService } from '../agents/agent-runner.service.js';
+import { logger } from '../../common/logger/logger.js';
 
 export class MessagesService {
   async listMessages(chatId: string, limit: number, cursor?: string) {
@@ -84,8 +84,12 @@ export class MessagesService {
       return responseBody;
     });
 
-    // Phase 09 will enqueue the job here.
-    
+    // Fire-and-forget: run the agent workflow in-process.
+    // Phase 09 will replace this with a BullMQ job enqueue.
+    agentRunnerService.run(result.execution.id).catch((err) => {
+      logger.error({ err, executionId: result.execution.id }, 'AgentRunner fire-and-forget failed');
+    });
+
     return result;
   }
 }

@@ -21,6 +21,9 @@
     "db:reset": "prisma migrate reset"
   },
   "dependencies": {
+    "@langchain/core": "0.3.37",
+    "@langchain/langgraph": "0.2.42",
+    "@langchain/openai": "0.3.17",
     "@prisma/client": "^6.19.3",
     "@types/jsonwebtoken": "9.0.10",
     "argon2": "0.45.1",
@@ -31,13 +34,13 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "9.0.3",
     "multer": "^2.2.0",
-    "openai": "^7.4.0",
+    "openai": "7.4.0",
     "pdf-parse": "^2.4.5",
     "pino": "9.4.0",
     "pino-http": "10.3.0",
     "prisma": "^6.19.3",
     "uuid": "10.0.0",
-    "zod": "3.23.8"
+    "zod": "3.25.67"
   },
   "devDependencies": {
     "@types/cors": "2.8.17",
