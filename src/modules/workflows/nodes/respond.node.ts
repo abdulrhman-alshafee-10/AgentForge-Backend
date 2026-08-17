@@ -53,9 +53,16 @@ export async function respondNode(state: AgentState): Promise<Partial<AgentState
         observations.map((o, i) => `${i + 1}. ${o}`).join('\n');
     }
 
+    let memoriesBlock = '';
+    if (state.retrievedMemories?.length > 0) {
+      memoriesBlock = '\n\n## Long-term memory\n' +
+        state.retrievedMemories.map((m) => `- [${m.kind}] ${m.content}`).join('\n');
+    }
+
     const systemContent =
       systemPrompt +
       (plan ? `\n\n## Plan\n${plan}` : '') +
+      memoriesBlock +
       contextBlock +
       observationsBlock +
       '\n\nNow produce a clear, helpful final answer.';

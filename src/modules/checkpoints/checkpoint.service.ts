@@ -54,6 +54,7 @@ function deserializeState(raw: Record<string, unknown>): AgentState {
 export const CHECKPOINT_NODES = new Set([
   'plan',
   'retrieve',
+  'retrieve_memory',
   'act',
   'observe',
   'respond',

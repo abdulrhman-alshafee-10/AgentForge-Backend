@@ -4,6 +4,7 @@ import multer from 'multer';
 import { validate } from '../../common/middleware/validate.js';
 import { wrap } from '../../common/utils/async-wrap.js';
 import { PaginationSchema } from '../../common/utils/pagination.js';
+import { checkDocumentQuota } from '../../common/middleware/quota.js';
 import { documentsService } from './documents.service.js';
 
 // ─── Multer — memory storage, 10 MB cap ──────────────────────────────────────
@@ -27,6 +28,7 @@ const router = Router();
 router.post(
   '/',
   upload.single('file'),
+  checkDocumentQuota(),
   wrap(async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'No file uploaded' } });

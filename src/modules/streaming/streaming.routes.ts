@@ -96,9 +96,8 @@ router.get(
     }
 
     // ── 4. Live subscribe via a dedicated Redis connection ───────────────────
-    // ioredis requires a *separate* client for pub/sub because subscribing
-    // puts the connection into subscriber mode, making it unusable for other commands.
-    const channel = `execution:${executionId}`;
+    // Use the tenant-namespaced channel for isolation.
+    const channel = `tenant:${req.user!.tenantId}:execution:${executionId}`;
     const subscriber = createRedisSubscriber();
 
     let closed = false;

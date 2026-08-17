@@ -9,6 +9,7 @@ import { correlationId } from './common/middleware/correlation-id.js';
 import { notFound } from './common/middleware/not-found.js';
 import { errorHandler } from './common/middleware/error-handler.js';
 import { authenticate } from './common/middleware/authenticate.js';
+import { redisRateLimit } from './common/middleware/rate-limit.js';
 
 // ── Routers ───────────────────────────────────────────────────────────────────
 import { healthRouter } from './modules/health/health.routes.js';
@@ -90,6 +91,9 @@ export function createApp(): express.Application {
 
   // Apply authentication to all remaining /api/v1/* routes
   v1.use(authenticate());
+
+  // Per-user Redis-backed rate limit for all authenticated endpoints
+  v1.use(redisRateLimit({ scope: 'api' }));
 
   v1.use('/users', usersRouter);
   v1.use('/chats', chatsRouter);

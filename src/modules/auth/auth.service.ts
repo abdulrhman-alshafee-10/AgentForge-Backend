@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'crypto';
 import { ConflictError, NotFoundError, UnauthenticatedError } from '../../common/errors/index.js';
+import { AppError } from '../../common/errors/AppError.js';
 import { userRepository } from '../../db/repositories/user.repository.js';
 import { refreshTokenRepository } from '../../db/repositories/refresh-token.repository.js';
 import { tenantRepository } from '../../db/repositories/tenant.repository.js';
 import { passwordService } from './password.service.js';
 import { tokenService } from './token.service.js';
+import { getTenantSettings } from '../tenants/tenant.service.js';
 import type { AuthUser, TokenPair } from './auth.types.js';
 
 // ─── AuthService ──────────────────────────────────────────────────────────────
@@ -66,6 +68,12 @@ export class AuthService {
     // 1. Resolve tenant
     const tenant = await tenantRepository.findBySlug(input.tenantSlug);
     if (!tenant) throw new UnauthenticatedError('Invalid credentials');
+
+    // 1a. Check tenant is not disabled
+    const settings = getTenantSettings(tenant);
+    if (settings.disabled) {
+      throw new AppError('This workspace is disabled', 403, 'TENANT_DISABLED');
+    }
 
     const ctx = { tenantId: tenant.id };
 

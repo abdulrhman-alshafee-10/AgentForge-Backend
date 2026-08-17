@@ -1,34 +1,47 @@
 import { redis } from '../../redis/redis.js';
+import { prisma } from '../../db/prisma.js';
 
 // ─── Cancellation Service ─────────────────────────────────────────────────────
 //
-// Uses a Redis key as a lightweight cancellation flag.
-// The HTTP cancel endpoint sets the flag; the worker checks it between
-// graph nodes and before each tool call.
+// Uses a tenant-namespaced Redis key as a lightweight cancellation flag.
+// The HTTP cancel endpoint sets the flag; the worker polls it between nodes.
 //
-// Key TTL is set to 1 hour — long enough to survive any plausible execution
-// but short enough not to accumulate stale keys.
+// Key TTL: 1 hour — survives any plausible execution duration.
 
 const TTL_SECONDS = 3_600;
 
-function cancelKey(executionId: string): string {
-  return `cancel:execution:${executionId}`;
+function cancelKey(tenantId: string, executionId: string): string {
+  return `tenant:${tenantId}:cancel:execution:${executionId}`;
+}
+
+// ─── Helper: resolve tenantId from executionId if not provided ────────────────
+
+async function resolveTenantId(executionId: string, tenantId?: string): Promise<string> {
+  if (tenantId) return tenantId;
+  const exec = await prisma.execution.findUnique({
+    where: { id: executionId },
+    select: { tenantId: true },
+  });
+  return exec?.tenantId ?? executionId; // fallback to executionId avoids crashes
 }
 
 export const cancellationService = {
   /** Signal that the execution should stop as soon as possible. */
-  async requestCancel(executionId: string): Promise<void> {
-    await redis.setex(cancelKey(executionId), TTL_SECONDS, '1');
+  async requestCancel(executionId: string, tenantId?: string): Promise<void> {
+    const tid = await resolveTenantId(executionId, tenantId);
+    await redis.setex(cancelKey(tid, executionId), TTL_SECONDS, '1');
   },
 
   /** Returns true if a cancel has been requested. */
-  async isCancelled(executionId: string): Promise<boolean> {
-    const val = await redis.get(cancelKey(executionId));
+  async isCancelled(executionId: string, tenantId?: string): Promise<boolean> {
+    const tid = await resolveTenantId(executionId, tenantId);
+    const val = await redis.get(cancelKey(tid, executionId));
     return val === '1';
   },
 
   /** Remove the flag once the execution is fully done. */
-  async clearCancel(executionId: string): Promise<void> {
-    await redis.del(cancelKey(executionId));
+  async clearCancel(executionId: string, tenantId?: string): Promise<void> {
+    const tid = await resolveTenantId(executionId, tenantId);
+    await redis.del(cancelKey(tid, executionId));
   },
 };

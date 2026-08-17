@@ -40,6 +40,14 @@ export interface AgentState {
     distance: number;
   }>;
 
+  /** Long-term memories retrieved for this turn */
+  retrievedMemories: Array<{
+    id: string;
+    kind: string;
+    content: string;
+    distance: number;
+  }>;
+
   // ── ReAct loop ────────────────────────────────────────────────────────────
   /** Full LangChain message history passed to the LLM */
   messages: BaseMessage[];
@@ -86,6 +94,7 @@ export function createInitialState(overrides: Partial<AgentState> & {
     plan: null,
     needsRetrieval: false,
     retrievedChunks: [],
+    retrievedMemories: [],
     messages: [],
     toolResults: [],
     observations: [],

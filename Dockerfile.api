@@ -1,0 +1,50 @@
+# ─── Stage 1: deps ───────────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+COPY package*.json ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+COPY prisma.config.ts ./prisma.config.ts
+
+RUN npm ci --ignore-scripts
+
+# Generate Prisma client (needs the schema)
+RUN npx prisma generate
+
+# ─── Stage 2: build ───────────────────────────────────────────────────────────
+FROM deps AS build
+WORKDIR /app
+
+COPY tsconfig*.json ./
+COPY src ./src
+
+RUN npm run build
+
+# ─── Stage 3: runtime ────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+WORKDIR /app
+
+# Create a non-root user
+RUN addgroup -S agentforge && adduser -S agentforge -G agentforge
+
+# Copy production node_modules and Prisma client from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/prisma ./prisma
+
+# Copy compiled output
+COPY --from=build /app/dist ./dist
+
+# Copy only the files the runtime needs
+COPY package.json ./
+
+USER agentforge
+
+ENV NODE_ENV=production
+
+# Liveness / readiness probes use this port
+EXPOSE 3000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/v1/health/live || exit 1
+
+CMD ["node", "dist/server.js"]

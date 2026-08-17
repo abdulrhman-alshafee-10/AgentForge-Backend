@@ -37,6 +37,13 @@ export async function reasonNode(state: AgentState): Promise<Partial<AgentState>
       retrievedChunks.map((c, i) => `[${i + 1}] ${c.content}`).join('\n\n');
   }
 
+  // ── Build memories block ─────────────────────────────────────────────────
+  let memoriesBlock = '';
+  if (state.retrievedMemories?.length > 0) {
+    memoriesBlock = '\n\n## Long-term memory\n' +
+      state.retrievedMemories.map((m) => `- [${m.kind}] ${m.content}`).join('\n');
+  }
+
   // ── Build observations block ─────────────────────────────────────────────
   let observationsBlock = '';
   if (observations.length > 0) {
@@ -47,6 +54,7 @@ export async function reasonNode(state: AgentState): Promise<Partial<AgentState>
   const systemContent =
     systemPrompt +
     (plan ? `\n\n## Plan\n${plan}` : '') +
+    memoriesBlock +
     contextBlock +
     observationsBlock;
 

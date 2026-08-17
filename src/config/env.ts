@@ -29,7 +29,7 @@ const EnvSchema = z.object({
 
   // RAG (Phase 06)
   OLLAMA_BASE_URL: z.string().url('OLLAMA_BASE_URL must be a valid URL').default('http://localhost:11434/v1'),
-  OLLAMA_API_KEY: z.string().default('ollama'), // Ollama ignores the key but OpenAI SDK requires it
+  OLLAMA_API_KEY: z.string().default('ollama'),
   OLLAMA_EMBED_MODEL: z.string().default('nomic-embed-text'),
   OLLAMA_CHAT_MODEL: z.string().default('llama3.2'),
   STORAGE_PATH: z.string().default('./storage/documents'),
@@ -43,6 +43,20 @@ const EnvSchema = z.object({
     .min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
+
+  // Rate limiting (Phase 14)
+  // Per-user API rate limit window in milliseconds
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
+  // Max requests per user per window for general API endpoints
+  RATE_LIMIT_API_MAX: z.coerce.number().int().min(1).default(120),
+  // Stricter limits for auth endpoints (per IP)
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(10),
+
+  // Caching (Phase 14)
+  // TTL in seconds for tenant settings cache
+  CACHE_TENANT_SETTINGS_TTL: z.coerce.number().int().min(0).default(30),
+  // TTL in seconds for embedding content-hash cache
+  CACHE_EMBEDDING_TTL: z.coerce.number().int().min(0).default(3600),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

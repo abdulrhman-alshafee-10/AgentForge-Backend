@@ -4,16 +4,13 @@ import { validate } from '../../common/middleware/validate.js';
 import { wrap } from '../../common/utils/async-wrap.js';
 import { chatOwnership } from '../../common/middleware/chat-ownership.js';
 import { PaginationSchema } from '../../common/utils/pagination.js';
+import { checkExecutionQuota } from '../../common/middleware/quota.js';
 import { messagesService } from './messages.service.js';
-
-// ─── Validation schemas ───────────────────────────────────────────────────────
 
 const CreateMessageSchema = z.object({
   content: z.string().min(1),
   attachments: z.array(z.object({ documentId: z.string().uuid() })).optional(),
 });
-
-// ─── Router ───────────────────────────────────────────────────────────────────
 
 const router = Router({ mergeParams: true });
 
@@ -23,15 +20,13 @@ const router = Router({ mergeParams: true });
 router.post(
   '/',
   chatOwnership(),
+  checkExecutionQuota(),
   validate({ body: CreateMessageSchema }),
   wrap(async (req: Request, res: Response) => {
     const idempotencyKey = req.header('Idempotency-Key');
     const { content, attachments } = req.body;
-    
-    // We assume the frontend passes the agentId when it created the chat.
-    // The chat object is attached by the chatOwnership middleware.
     const chat = req.chat!;
-    
+
     const result = await messagesService.createMessage(
       req.user!.tenantId,
       req.user!.id,
@@ -39,11 +34,11 @@ router.post(
       chat.agentId,
       content,
       attachments,
-      idempotencyKey
+      idempotencyKey,
     );
-    
+
     res.status(201).json(result);
-  })
+  }),
 );
 
 /**
@@ -54,10 +49,14 @@ router.get(
   chatOwnership(),
   validate({ query: PaginationSchema }),
   wrap(async (req: Request, res: Response) => {
-    const { cursor, limit } = req.query as any;
-    const result = await messagesService.listMessages(req.params.chatId as string, limit, cursor);
+    const query = req.query as unknown as { cursor?: string; limit: number };
+    const result = await messagesService.listMessages(
+      req.params.chatId as string,
+      query.limit,
+      query.cursor,
+    );
     res.json(result);
-  })
+  }),
 );
 
 export { router as messagesRouter };

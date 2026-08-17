@@ -1,13 +1,12 @@
 import OpenAI from 'openai';
 import { env } from '../../config/env.js';
 import { AppError } from '../../common/errors/AppError.js';
+import { getCachedEmbedding, setCachedEmbedding } from '../../common/cache/cache.js';
 
 export class EmbeddingsProvider {
   private client: OpenAI;
 
   constructor() {
-    // The OpenAI SDK is reused as a Ollama-compatible client.
-    // Local Ollama serves an OpenAI-compatible API at /v1 by default.
     this.client = new OpenAI({
       baseURL: env.OLLAMA_BASE_URL,
       apiKey: env.OLLAMA_API_KEY,
@@ -16,20 +15,41 @@ export class EmbeddingsProvider {
 
   /**
    * Generates embeddings for a batch of text chunks.
-   * Ollama's nomic-embed-text model outputs 768-dimensional vectors.
+   * Each chunk is checked against the Redis cache first; only uncached
+   * chunks are sent to Ollama.
    */
   async embedBatch(chunks: string[]): Promise<number[][]> {
-    try {
-      const response = await this.client.embeddings.create({
-        model: env.OLLAMA_EMBED_MODEL,
-        input: chunks,
-      });
+    const results: (number[] | null)[] = await Promise.all(
+      chunks.map((c) => getCachedEmbedding(env.OLLAMA_EMBED_MODEL, c)),
+    );
 
-      return response.data.map((d) => d.embedding);
-    } catch (err: any) {
-      // AppError(message, statusCode, code)
-      throw new AppError(`Embedding failed: ${err.message}`, 503, 'DEPENDENCY_UNAVAILABLE');
+    // Find which chunks are not cached
+    const uncachedIndices: number[] = [];
+    for (let i = 0; i < results.length; i++) {
+      if (!results[i]) uncachedIndices.push(i);
     }
+
+    if (uncachedIndices.length > 0) {
+      const uncachedChunks = uncachedIndices.map((i) => chunks[i]!);
+      try {
+        const response = await this.client.embeddings.create({
+          model: env.OLLAMA_EMBED_MODEL,
+          input: uncachedChunks,
+        });
+
+        for (let j = 0; j < uncachedIndices.length; j++) {
+          const idx = uncachedIndices[j]!;
+          const vector = response.data[j]!.embedding;
+          results[idx] = vector;
+          // Cache for future calls
+          await setCachedEmbedding(env.OLLAMA_EMBED_MODEL, chunks[idx]!, vector);
+        }
+      } catch (err: any) {
+        throw new AppError(`Embedding failed: ${err.message}`, 503, 'DEPENDENCY_UNAVAILABLE');
+      }
+    }
+
+    return results as number[][];
   }
 
   /**

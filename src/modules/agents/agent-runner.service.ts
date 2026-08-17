@@ -2,6 +2,7 @@ import { prisma } from '../../db/prisma.js';
 import { eventsService } from '../executions/events.service.js';
 import { cancellationService } from '../executions/cancellation.service.js';
 import { checkpointService } from '../checkpoints/checkpoint.service.js';
+import { summarizerService } from '../memory/summarizer.service.js';
 import { buildResearchV1Graph } from '../workflows/research-v1.graph.js';
 import { createInitialState } from '../workflows/workflow.types.js';
 import { ApprovalRequiredError } from '../workflows/nodes/act.node.js';
@@ -193,6 +194,16 @@ export class AgentRunnerService {
       });
 
       await cancellationService.clearCancel(executionId);
+
+      // Auto-extract memories from the completed conversation (non-fatal)
+      summarizerService.extractAndSave({
+        executionId,
+        tenantId,
+        userId,
+        chatId,
+      }).catch((err) => {
+        logger.warn({ err, executionId }, 'AgentRunner: memory extraction failed (non-fatal)');
+      });
 
       // Prune intermediate checkpoints for this completed execution
       await checkpointService.prune(executionId).catch((err) => {

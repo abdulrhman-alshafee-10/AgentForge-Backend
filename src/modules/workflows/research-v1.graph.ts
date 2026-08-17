@@ -2,6 +2,7 @@ import { StateGraph, END, START } from '@langchain/langgraph';
 import { BaseMessage } from '@langchain/core/messages';
 import { planNode } from './nodes/plan.node.js';
 import { retrieveNode } from './nodes/retrieve.node.js';
+import { retrieveMemoryNode } from './nodes/retrieve-memory.node.js';
 import { reasonNode } from './nodes/reason.node.js';
 import { actNode } from './nodes/act.node.js';
 import { observeNode } from './nodes/observe.node.js';
@@ -13,6 +14,7 @@ import type { AgentState } from './workflow.types.js';
 export const NODE = {
   PLAN: 'plan',
   RETRIEVE: 'retrieve',
+  RETRIEVE_MEMORY: 'retrieve_memory',
   REASON: 'reason',
   ACT: 'act',
   OBSERVE: 'observe',
@@ -23,7 +25,7 @@ export const NODE = {
 
 function afterPlan(state: AgentState): string {
   if (state.error) return NODE.RESPOND;
-  return state.needsRetrieval ? NODE.RETRIEVE : NODE.REASON;
+  return state.needsRetrieval ? NODE.RETRIEVE : NODE.RETRIEVE_MEMORY;
 }
 
 function afterReason(state: AgentState): string {
@@ -74,6 +76,7 @@ export function buildResearchV1Graph() {
     plan:              { value: (_x: any, y: any) => y,                    default: () => null },
     needsRetrieval:    { value: (_x: any, y: any) => y ?? false,           default: () => false },
     retrievedChunks:   { value: (_x: any, y: RetrievedChunk[]) => y ?? [], default: () => [] },
+    retrievedMemories: { value: (_x: any, y: any[]) => y ?? [],            default: () => [] },
     messages:          { value: (_x: any, y: BaseMessage[]) => y ?? [],    default: () => [] },
     toolResults:       { value: (_x: any, y: ToolResultItem[]) => y ?? [], default: () => [] },
     observations:      { value: (_x: any, y: string[]) => y ?? [],        default: () => [] },
@@ -92,22 +95,27 @@ export function buildResearchV1Graph() {
   // ── Add nodes ──────────────────────────────────────────────────────────────
   graph.addNode(NODE.PLAN,     planNode     as any);
   graph.addNode(NODE.RETRIEVE, retrieveNode as any);
-  graph.addNode(NODE.REASON,   reasonNode   as any);
-  graph.addNode(NODE.ACT,      actNode      as any);
-  graph.addNode(NODE.OBSERVE,  observeNode  as any);
-  graph.addNode(NODE.RESPOND,  respondNode  as any);
+  graph.addNode(NODE.REASON,          reasonNode        as any);
+  graph.addNode(NODE.RETRIEVE_MEMORY, retrieveMemoryNode as any);
+  graph.addNode(NODE.ACT,             actNode           as any);
+  graph.addNode(NODE.OBSERVE,         observeNode       as any);
+  graph.addNode(NODE.RESPOND,         respondNode       as any);
 
   // ── Entry ─────────────────────────────────────────────────────────────────
   graph.addEdge(START as any, NODE.PLAN as any);
 
   // ── Conditional edges ─────────────────────────────────────────────────────
   graph.addConditionalEdges(NODE.PLAN as any, afterPlan as any, {
-    [NODE.RETRIEVE]: NODE.RETRIEVE,
-    [NODE.REASON]:   NODE.REASON,
-    [NODE.RESPOND]:  NODE.RESPOND,
+    [NODE.RETRIEVE]:        NODE.RETRIEVE,
+    [NODE.RETRIEVE_MEMORY]: NODE.RETRIEVE_MEMORY,
+    [NODE.RESPOND]:         NODE.RESPOND,
   } as any);
 
-  graph.addEdge(NODE.RETRIEVE as any, NODE.REASON as any);
+  // After document retrieval, always fetch memories too
+  graph.addEdge(NODE.RETRIEVE as any, NODE.RETRIEVE_MEMORY as any);
+
+  // After memory retrieval, always reason
+  graph.addEdge(NODE.RETRIEVE_MEMORY as any, NODE.REASON as any);
 
   graph.addConditionalEdges(NODE.REASON as any, afterReason as any, {
     [NODE.ACT]:     NODE.ACT,

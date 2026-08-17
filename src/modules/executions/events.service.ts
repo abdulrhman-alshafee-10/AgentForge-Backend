@@ -59,7 +59,8 @@ export class EventsService {
 
     // Publish to Redis — failure is non-fatal; events are already in Postgres
     // and can be replayed from there by reconnecting clients.
-    const channel = `execution:${executionId}`;
+    // Use tenant-namespaced channel for isolation.
+    const channel = `tenant:${tenantId}:execution:${executionId}`;
     redis.publish(channel, JSON.stringify(dto)).catch(() => {
       // intentionally swallowed — Postgres is the source of truth
     });

@@ -1,0 +1,40 @@
+# ─── Stage 1: deps ───────────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+COPY package*.json ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+COPY prisma.config.ts ./prisma.config.ts
+
+RUN npm ci --ignore-scripts
+RUN npx prisma generate
+
+# ─── Stage 2: build ───────────────────────────────────────────────────────────
+FROM deps AS build
+WORKDIR /app
+
+COPY tsconfig*.json ./
+COPY src ./src
+
+RUN npm run build
+
+# ─── Stage 3: runtime ────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+WORKDIR /app
+
+RUN addgroup -S agentforge && adduser -S agentforge -G agentforge
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/prisma ./prisma
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+USER agentforge
+
+ENV NODE_ENV=production
+
+# Workers don't expose HTTP but we keep a readiness signal via the process exit code.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD pgrep -x node || exit 1
+
+CMD ["node", "dist/worker.js"]
