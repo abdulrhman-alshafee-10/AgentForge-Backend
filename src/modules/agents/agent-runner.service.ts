@@ -1,32 +1,33 @@
 import { prisma } from '../../db/prisma.js';
 import { eventsService } from '../executions/events.service.js';
+import { cancellationService } from '../executions/cancellation.service.js';
 import { buildResearchV1Graph } from '../workflows/research-v1.graph.js';
 import { createInitialState } from '../workflows/workflow.types.js';
 import { MessageRole, ExecutionStatus } from '@prisma/client';
 import { logger } from '../../common/logger/logger.js';
 
+// ─── Sentinel error for clean cancellation ────────────────────────────────────
+//
+// Thrown when a cancel flag is detected.  The BullMQ worker catches this
+// specific type and marks the job as non-retryable so it is moved straight
+// to the failed set (not retried — the execution was intentionally stopped).
+
+export class ExecutionCancelledError extends Error {
+  readonly isNonRetryable = true;
+  constructor(executionId: string) {
+    super(`Execution ${executionId} was cancelled`);
+    this.name = 'ExecutionCancelledError';
+  }
+}
+
 // ─── Agent Runner Service ──────────────────────────────────────────────────────
-//
-// Orchestrates a single execution end-to-end:
-//
-//  1. Load the agent configuration and input message from Postgres.
-//  2. Mark the execution RUNNING and emit STARTED.
-//  3. Build and run the LangGraph workflow.
-//  4. On success: persist the assistant Message, mark execution COMPLETED.
-//  5. On failure: emit FAILED event, persist error, mark execution FAILED.
-//
-// Called fire-and-forget from MessagesService after the HTTP response is sent.
-// Phase 09 will move this call into a BullMQ worker.
 
 export class AgentRunnerService {
   async run(executionId: string): Promise<void> {
     // ── 1. Load execution + agent + input message ──────────────────────────
     const execution = await prisma.execution.findUnique({
       where: { id: executionId },
-      include: {
-        agent: true,
-        inputMessage: true,
-      },
+      include: { agent: true, inputMessage: true },
     });
 
     if (!execution) {
@@ -34,15 +35,26 @@ export class AgentRunnerService {
       return;
     }
 
+    // Idempotency: if another worker already picked this up, skip.
     if (execution.status !== ExecutionStatus.CREATED) {
-      logger.warn({ executionId, status: execution.status }, 'AgentRunner: execution already processed');
+      logger.warn(
+        { executionId, status: execution.status },
+        'AgentRunner: execution already processed — skipping',
+      );
       return;
     }
 
     const { tenantId, chatId, userId, agentId, agent, inputMessage } = execution;
     const input = inputMessage.content;
 
-    // ── 2. Mark RUNNING ────────────────────────────────────────────────────
+    // ── 2. Pre-flight cancel check ─────────────────────────────────────────
+    if (await cancellationService.isCancelled(executionId)) {
+      logger.info({ executionId }, 'AgentRunner: cancelled before start');
+      await this.handleCancel(executionId, tenantId, chatId);
+      return;
+    }
+
+    // ── 3. Mark RUNNING ────────────────────────────────────────────────────
     await prisma.execution.update({
       where: { id: executionId },
       data: { status: ExecutionStatus.RUNNING, startedAt: new Date() },
@@ -55,7 +67,7 @@ export class AgentRunnerService {
 
     logger.info({ executionId, agentId, model: agent.model }, 'AgentRunner: starting');
 
-    // ── 3. Run the graph ────────────────────────────────────────────────────
+    // ── 4. Run the graph ────────────────────────────────────────────────────
     try {
       const graph = buildResearchV1Graph();
 
@@ -71,16 +83,39 @@ export class AgentRunnerService {
         temperature: Number(agent.temperature),
       });
 
-      const finalState = await graph.invoke(initialState as any) as typeof initialState;
+      // LangGraph doesn't have native cancel support, so we wrap invoke in a
+      // cancellation race.  Between-node checks happen inside the nodes
+      // themselves via cancellationService.isCancelled().
+      const cancelRace = new Promise<never>((_, reject) => {
+        const interval = setInterval(async () => {
+          if (await cancellationService.isCancelled(executionId)) {
+            clearInterval(interval);
+            reject(new ExecutionCancelledError(executionId));
+          }
+        }, 1_000); // poll every second
+        // Store interval ref on the promise so we can cancel it on completion
+        (cancelRace as any).__interval = interval;
+      });
 
-      // Check for graph-level error flag
+      let finalState: typeof initialState;
+      try {
+        finalState = await Promise.race([
+          graph.invoke(initialState as any).then((s) => s as typeof initialState),
+          cancelRace,
+        ]);
+      } finally {
+        // Always clear the polling interval
+        const interval = (cancelRace as any).__interval;
+        if (interval) clearInterval(interval);
+      }
+
       if (finalState.error) {
         throw new Error(finalState.error);
       }
 
       const responseText = finalState.response ?? '(no response)';
 
-      // ── 4. Persist assistant message ─────────────────────────────────────
+      // ── 5. Persist assistant message ─────────────────────────────────────
       const outputMessage = await prisma.message.create({
         data: {
           tenantId,
@@ -96,7 +131,6 @@ export class AgentRunnerService {
         },
       });
 
-      // ── Link output message to execution ──────────────────────────────────
       await prisma.execution.update({
         where: { id: executionId },
         data: {
@@ -107,36 +141,55 @@ export class AgentRunnerService {
         },
       });
 
-      // ── Emit terminal COMPLETED event ─────────────────────────────────────
       await eventsService.appendEvent(tenantId, chatId, executionId, 'COMPLETED', {
         outputMessageId: outputMessage.id,
         loopCount: finalState.loopCount,
         toolsUsed: finalState.toolResults.length,
       });
 
+      await cancellationService.clearCancel(executionId);
       logger.info({ executionId, loopCount: finalState.loopCount }, 'AgentRunner: completed');
     } catch (err: any) {
-      // ── 5. Handle failure ─────────────────────────────────────────────────
-      logger.error({ err, executionId }, 'AgentRunner: execution failed');
+      if (err instanceof ExecutionCancelledError) {
+        await this.handleCancel(executionId, tenantId, chatId);
+        throw err; // re-throw so BullMQ marks the job non-retryable
+      }
 
-      const errorPayload = {
-        message: err.message ?? 'Unknown error',
-        stack: err.stack,
-      };
+      logger.error({ err, executionId }, 'AgentRunner: execution failed');
 
       await prisma.execution.update({
         where: { id: executionId },
         data: {
           status: ExecutionStatus.FAILED,
           finishedAt: new Date(),
-          error: errorPayload,
+          error: { message: err.message ?? 'Unknown error', stack: err.stack },
         },
       });
 
       await eventsService.appendEvent(tenantId, chatId, executionId, 'FAILED', {
-        error: errorPayload.message,
+        error: err.message ?? 'Unknown error',
       });
+
+      throw err; // re-throw so BullMQ retries
     }
+  }
+
+  private async handleCancel(
+    executionId: string,
+    tenantId: string,
+    chatId: string,
+  ): Promise<void> {
+    await prisma.execution.update({
+      where: { id: executionId },
+      data: { status: ExecutionStatus.CANCELLED, finishedAt: new Date() },
+    });
+
+    await eventsService.appendEvent(tenantId, chatId, executionId, 'CANCELLED', {
+      reason: 'Cancellation requested',
+    });
+
+    await cancellationService.clearCancel(executionId);
+    logger.info({ executionId }, 'AgentRunner: execution cancelled');
   }
 }
 

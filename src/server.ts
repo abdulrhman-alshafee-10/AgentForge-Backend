@@ -5,6 +5,7 @@ import { logger } from './common/logger/logger.js';
 import { prisma } from './db/prisma.js';
 import { redis } from './redis/redis.js';
 import { registerTools } from './modules/tools/tools.register.js';
+import { executionQueue } from './queues/queue.js';
 
 // ─── Server entry point ───────────────────────────────────────────────────────
 //
@@ -48,6 +49,9 @@ function shutdown(signal: string): void {
     // Disconnect Prisma and Redis before exiting
     prisma.$disconnect().then(() => {
       logger.info('Prisma disconnected');
+      return executionQueue.close();
+    }).then(() => {
+      logger.info('BullMQ queue closed');
       return redis.quit();
     }).then(() => {
       logger.info('Redis disconnected');

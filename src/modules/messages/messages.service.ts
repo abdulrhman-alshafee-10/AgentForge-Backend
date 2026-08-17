@@ -2,7 +2,7 @@ import { messagesRepository } from './messages.repository.js';
 import { paginate, decodeCursor } from '../../common/utils/pagination.js';
 import { prisma } from '../../db/prisma.js';
 import { ExecutionStatus, MessageRole } from '@prisma/client';
-import { agentRunnerService } from '../agents/agent-runner.service.js';
+import { enqueueExecution } from '../../queues/execution.producer.js';
 import { logger } from '../../common/logger/logger.js';
 
 export class MessagesService {
@@ -84,10 +84,16 @@ export class MessagesService {
       return responseBody;
     });
 
-    // Fire-and-forget: run the agent workflow in-process.
-    // Phase 09 will replace this with a BullMQ job enqueue.
-    agentRunnerService.run(result.execution.id).catch((err) => {
-      logger.error({ err, executionId: result.execution.id }, 'AgentRunner fire-and-forget failed');
+    // Enqueue the execution job — the BullMQ worker picks it up and runs
+    // the LangGraph workflow independently of this HTTP request.
+    await enqueueExecution(result.execution.id, result.execution.tenantId).catch((err) => {
+      // Redis being temporarily unavailable should not fail the HTTP request.
+      // The execution stays in CREATED status and will be picked up by a
+      // stuck-execution sweeper (Phase 09 exercise) or manual re-queue.
+      logger.error(
+        { err, executionId: result.execution.id },
+        'Failed to enqueue execution — will remain in CREATED status',
+      );
     });
 
     return result;

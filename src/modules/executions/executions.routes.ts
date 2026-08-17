@@ -10,6 +10,7 @@ import { eventsService } from './events.service.js';
 import { toolCallRepository } from '../tools/tool-call.repository.js';
 import { toolExecutorService } from '../tools/tool-executor.service.js';
 import { prisma } from '../../db/prisma.js';
+import { cancellationService } from './cancellation.service.js';
 import { ConflictError } from '../../common/errors/HttpErrors.js';
 
 const router = Router({ mergeParams: true });
@@ -82,10 +83,15 @@ router.post(
     const terminalStatuses = ['COMPLETED', 'FAILED', 'CANCELLED'];
 
     if (terminalStatuses.includes(execution.status)) {
-      // Already terminal — idempotent, just return current state.
+      // Already terminal — idempotent, return current state.
       res.json({ execution });
       return;
     }
+
+    // Set the Redis cancellation flag first so the worker stops ASAP,
+    // then update the DB status.  The worker may also update to CANCELLED
+    // when it detects the flag — both paths converge on the same end state.
+    await cancellationService.requestCancel(execution.id);
 
     const updated = await prisma.execution.update({
       where: { id: execution.id },
@@ -97,7 +103,7 @@ router.post(
       execution.chatId,
       execution.id,
       'CANCELLED',
-      { cancelledBy: req.user!.id },
+      { cancelledBy: req.user!.id, source: 'http' },
     );
 
     res.json({ execution: updated });
