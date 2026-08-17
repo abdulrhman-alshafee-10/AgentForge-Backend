@@ -4,6 +4,7 @@ import { env } from './config/env.js';
 import { logger } from './common/logger/logger.js';
 import { prisma } from './db/prisma.js';
 import { redis } from './redis/redis.js';
+import { registerTools } from './modules/tools/tools.register.js';
 
 // ─── Server entry point ───────────────────────────────────────────────────────
 //
@@ -22,6 +23,9 @@ import { redis } from './redis/redis.js';
 
 const app = createApp();
 const server = http.createServer(app);
+
+// Register tools before the server starts accepting requests.
+registerTools();
 
 server.listen(env.PORT, () => {
   logger.info(

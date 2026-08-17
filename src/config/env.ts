@@ -31,6 +31,7 @@ const EnvSchema = z.object({
   OLLAMA_BASE_URL: z.string().url('OLLAMA_BASE_URL must be a valid URL').default('http://localhost:11434/v1'),
   OLLAMA_API_KEY: z.string().default('ollama'), // Ollama ignores the key but OpenAI SDK requires it
   OLLAMA_EMBED_MODEL: z.string().default('nomic-embed-text'),
+  OLLAMA_CHAT_MODEL: z.string().default('llama3.2'),
   STORAGE_PATH: z.string().default('./storage/documents'),
 
   // JWT (Phase 03)
