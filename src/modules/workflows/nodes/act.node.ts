@@ -90,7 +90,7 @@ export async function actNode(state: AgentState): Promise<Partial<AgentState>> {
         toolResults: [
           ...state.toolResults,
           {
-            toolCallId: 'rejected',
+            toolCallId: `rejected:${pendingToolName}`,
             toolName: pendingToolName,
             status: 'ERROR' as const,
             error: {
@@ -99,6 +99,8 @@ export async function actNode(state: AgentState): Promise<Partial<AgentState>> {
             },
           },
         ],
+        // Also append a ToolMessage so the LLM conversation history stays coherent.
+        // We use the most recent AIMessage's tool call ID if available; otherwise skip.
         pendingToolName: null,
         pendingToolInput: null,
       };

@@ -91,7 +91,7 @@ router.post(
     // Set the Redis cancellation flag first so the worker stops ASAP,
     // then update the DB status.  The worker may also update to CANCELLED
     // when it detects the flag — both paths converge on the same end state.
-    await cancellationService.requestCancel(execution.id);
+    await cancellationService.requestCancel(execution.id, execution.tenantId);
 
     const updated = await prisma.execution.update({
       where: { id: execution.id },

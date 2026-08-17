@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../redis/redis.js';
 import { executionQueue } from '../../queues/queue.js';
+import { logger } from '../../common/logger/logger.js';
 
 // ─── Health controller ────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ export async function queues(_req: Request, res: Response): Promise<void> {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    logger.error({ err }, 'Failed to fetch queue stats');
     res.status(503).json({
       error: { code: 'DEPENDENCY_UNAVAILABLE', message: 'Failed to fetch queue stats' },
     });

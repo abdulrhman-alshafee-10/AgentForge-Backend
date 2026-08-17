@@ -1,3 +1,4 @@
+// ─── API server entry point ───────────────────────────────────────────────────
 import http from 'http';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
@@ -7,38 +8,19 @@ import { redis } from './redis/redis.js';
 import { registerTools } from './modules/tools/tools.register.js';
 import { executionQueue } from './queues/queue.js';
 
-// ─── Server entry point ───────────────────────────────────────────────────────
-//
-// Responsibilities:
-//   1. Create the Express app.
-//   2. Bind it to a port.
-//   3. Handle SIGTERM / SIGINT for graceful shutdown.
-//
-// Graceful shutdown sequence:
-//   a. Stop accepting new connections (server.close).
-//   b. Wait up to SHUTDOWN_TIMEOUT_MS for in-flight requests to finish.
-//   c. Exit 0 on clean drain; exit 1 on timeout.
-//
-// The app itself (createApp) is kept in app.ts so tests can import it
-// without binding a port.
-
 const app = createApp();
 const server = http.createServer(app);
 
-// Register tools before the server starts accepting requests.
 registerTools();
 
 server.listen(env.PORT, () => {
-  logger.info(
-    { port: env.PORT, env: env.NODE_ENV },
-    `AgentForge API listening on port ${env.PORT}`,
-  );
+  logger.info({ port: env.PORT, env: env.NODE_ENV }, 'AgentForge API listening');
 });
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
 function shutdown(signal: string): void {
-  logger.info({ signal }, 'Shutdown signal received — draining connections');
+  logger.info({ signal }, 'Shutdown signal — draining connections');
 
   server.close((err) => {
     if (err) {
@@ -46,29 +28,21 @@ function shutdown(signal: string): void {
       process.exit(1);
     }
 
-    // Disconnect Prisma and Redis before exiting
-    prisma.$disconnect().then(() => {
-      logger.info('Prisma disconnected');
-      return executionQueue.close();
-    }).then(() => {
-      logger.info('BullMQ queue closed');
-      return redis.quit();
-    }).then(() => {
-      logger.info('Redis disconnected');
-      logger.info('Server closed cleanly');
-      process.exit(0);
-    }).catch((disconnectErr: unknown) => {
-      logger.error({ err: disconnectErr }, 'Error during shutdown cleanup');
-      process.exit(1);
-    });
+    prisma.$disconnect()
+      .then(() => executionQueue.close())
+      .then(() => redis.quit())
+      .then(() => {
+        logger.info('Server closed cleanly');
+        process.exit(0);
+      })
+      .catch((disconnectErr: unknown) => {
+        logger.error({ err: disconnectErr }, 'Shutdown cleanup error');
+        process.exit(1);
+      });
   });
 
-  // Force-exit if connections are not drained in time
   setTimeout(() => {
-    logger.warn(
-      { timeoutMs: env.SHUTDOWN_TIMEOUT_MS },
-      'Shutdown timeout exceeded — forcing exit',
-    );
+    logger.warn({ timeoutMs: env.SHUTDOWN_TIMEOUT_MS }, 'Shutdown timeout — forcing exit');
     process.exit(1);
   }, env.SHUTDOWN_TIMEOUT_MS).unref();
 }
@@ -76,17 +50,12 @@ function shutdown(signal: string): void {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// ─── Unhandled rejections / exceptions ───────────────────────────────────────
-//
-// These are programming bugs, not operational errors. Log and exit so the
-// process manager (Docker, PM2, Kubernetes) can restart cleanly.
-
 process.on('unhandledRejection', (reason) => {
-  logger.fatal({ reason }, 'Unhandled promise rejection — exiting');
+  logger.fatal({ reason }, 'Unhandled promise rejection');
   process.exit(1);
 });
 
 process.on('uncaughtException', (err) => {
-  logger.fatal({ err }, 'Uncaught exception — exiting');
+  logger.fatal({ err }, 'Uncaught exception');
   process.exit(1);
 });

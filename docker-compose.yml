@@ -1,18 +1,3 @@
-version: '3.9'
-
-# ─── AgentForge — local development compose ──────────────────────────────────
-#
-# Starts:
-#   api     — Express HTTP server (port 3000)
-#   worker  — BullMQ worker process
-#   db      — PostgreSQL 16 with pgvector
-#   redis   — Redis 7 (persistent)
-#
-# Usage:
-#   docker compose up          # start all services
-#   docker compose up api      # start only the API (+ deps)
-#   docker compose logs -f     # tail all logs
-
 services:
 
   # ── API server ──────────────────────────────────────────────────────────────

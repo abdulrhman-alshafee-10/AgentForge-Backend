@@ -1,3 +1,4 @@
+// ─── Agent runner service ─────────────────────────────────────────────────────
 import { prisma } from '../../db/prisma.js';
 import { eventsService } from '../executions/events.service.js';
 import { cancellationService } from '../executions/cancellation.service.js';
@@ -10,8 +11,6 @@ import { MessageRole, ExecutionStatus } from '@prisma/client';
 import { logger } from '../../common/logger/logger.js';
 import type { AgentState } from '../workflows/workflow.types.js';
 
-// ─── Sentinel error for clean cancellation ────────────────────────────────────
-
 export class ExecutionCancelledError extends Error {
   readonly isNonRetryable = true;
   constructor(executionId: string) {
@@ -20,11 +19,8 @@ export class ExecutionCancelledError extends Error {
   }
 }
 
-// ─── Agent Runner Service ──────────────────────────────────────────────────────
-
 export class AgentRunnerService {
   async run(executionId: string): Promise<void> {
-    // ── 1. Load execution ──────────────────────────────────────────────────
     const execution = await prisma.execution.findUnique({
       where: { id: executionId },
       include: { agent: true, inputMessage: true },
@@ -37,136 +33,89 @@ export class AgentRunnerService {
 
     const { tenantId, chatId, userId, agentId, agent, inputMessage } = execution;
 
-    // ── 2. Check if already processed ─────────────────────────────────────
-    // Allow RUNNING and WAITING_FOR_APPROVAL — both can be resumed.
-    const isResumable = ['CREATED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(execution.status);
-    if (!isResumable) {
-      logger.warn(
-        { executionId, status: execution.status },
-        'AgentRunner: execution is terminal — skipping',
-      );
+    if (!inputMessage) {
+      logger.error({ executionId }, 'AgentRunner: inputMessage is null — skipping');
       return;
     }
 
-    // ── 3. Pre-flight cancel check ─────────────────────────────────────────
-    if (await cancellationService.isCancelled(executionId)) {
-      logger.info({ executionId }, 'AgentRunner: cancelled before start');
+    const isResumable = ['CREATED', 'RUNNING', 'WAITING_FOR_APPROVAL'].includes(execution.status);
+    if (!isResumable) {
+      logger.warn({ executionId, status: execution.status }, 'AgentRunner: terminal — skipping');
+      return;
+    }
+
+    if (await cancellationService.isCancelled(executionId, tenantId)) {
       await this.handleCancel(executionId, tenantId, chatId);
       return;
     }
 
-    // ── 4. Mark RUNNING (idempotent update) ───────────────────────────────
     await prisma.execution.update({
       where: { id: executionId },
       data: { status: ExecutionStatus.RUNNING, startedAt: new Date() },
     });
 
-    // ── 5. Load latest checkpoint or build fresh state ────────────────────
-    const input = inputMessage.content;
+    // ─── Load checkpoint or build fresh state ─────────────────────────────────
+
     let initialState: AgentState;
-    let resumeFromNode: string | null = null;
     let parentCheckpointId: string | undefined;
 
     const saved = await checkpointService.loadLatest(executionId);
 
     if (saved) {
-      // Resume: reuse checkpointed state, skip to the node after the last one saved
       initialState = saved.state;
-      resumeFromNode = saved.checkpoint.nodeName;
       parentCheckpointId = saved.checkpoint.id;
-      logger.info(
-        { executionId, resumeFromNode },
-        'AgentRunner: resuming from checkpoint',
-      );
-
+      logger.info({ executionId, fromNode: saved.checkpoint.nodeName }, 'AgentRunner: resuming');
       await eventsService.appendEvent(tenantId, chatId, executionId, 'RESUMED', {
-        fromNode: resumeFromNode,
+        fromNode: saved.checkpoint.nodeName,
         checkpointId: saved.checkpoint.id,
       });
     } else {
-      // Fresh run
       initialState = createInitialState({
-        input,
-        tenantId,
-        userId,
-        executionId,
-        chatId,
-        agentId,
+        input: inputMessage.content,
+        tenantId, userId, executionId, chatId, agentId,
         systemPrompt: agent.systemPrompt || 'You are a helpful AI assistant.',
         model: agent.model,
         temperature: Number(agent.temperature),
       });
-
       await eventsService.appendEvent(tenantId, chatId, executionId, 'STARTED', {
-        agentId,
-        model: agent.model,
+        agentId, model: agent.model,
       });
-
-      logger.info({ executionId, agentId, model: agent.model }, 'AgentRunner: starting fresh');
+      logger.info({ executionId, agentId, model: agent.model }, 'AgentRunner: fresh start');
     }
 
-    // ── 6. Run the graph with per-node checkpoint saves ────────────────────
+    // ─── Run graph ────────────────────────────────────────────────────────────
+
     try {
       const graph = buildResearchV1Graph();
-
-      // Use stream() to get per-node output so we can save checkpoints between nodes.
-      // stream() yields objects of the shape { [nodeName]: partialState }
-      const stream = await graph.stream(initialState as any, {
-        streamMode: 'updates',
-      });
-
-      // Track the accumulated state as nodes complete
+      const stream = await graph.stream(initialState as any, { streamMode: 'updates' });
       let currentState: AgentState = { ...initialState };
-
-      // Cancel polling
       let cancelled = false;
+
       const cancelPoll = setInterval(async () => {
-        if (await cancellationService.isCancelled(executionId)) {
-          cancelled = true;
-        }
+        if (await cancellationService.isCancelled(executionId, tenantId)) cancelled = true;
       }, 1_000);
 
       try {
         for await (const update of stream) {
-          // Cancel check between nodes
-          if (cancelled) {
-            throw new ExecutionCancelledError(executionId);
-          }
+          if (cancelled) throw new ExecutionCancelledError(executionId);
 
-          // `update` is { nodeName: partialState }
           const [nodeName, nodeOutput] = Object.entries(update)[0] as [string, Partial<AgentState>];
-
-          // Merge output into current state
           currentState = { ...currentState, ...nodeOutput };
 
-          // Save checkpoint after this node
-          const cp = await checkpointService.save(
-            tenantId,
-            executionId,
-            nodeName,
-            currentState,
-            parentCheckpointId,
-          );
+          const cp = await checkpointService.save(tenantId, executionId, nodeName, currentState, parentCheckpointId);
           if (cp) parentCheckpointId = cp.id;
-
-          logger.debug({ executionId, nodeName }, 'AgentRunner: node complete');
         }
       } finally {
         clearInterval(cancelPoll);
       }
 
-      if (currentState.error) {
-        throw new Error(currentState.error);
-      }
+      if (currentState.error) throw new Error(currentState.error);
 
       const responseText = currentState.response ?? '(no response)';
 
-      // ── 7. Persist assistant message ─────────────────────────────────────
       const outputMessage = await prisma.message.create({
         data: {
-          tenantId,
-          chatId,
-          executionId,
+          tenantId, chatId, executionId,
           role: MessageRole.assistant,
           content: responseText,
           metadata: {
@@ -193,21 +142,14 @@ export class AgentRunnerService {
         toolsUsed: currentState.toolResults.length,
       });
 
-      await cancellationService.clearCancel(executionId);
+      await cancellationService.clearCancel(executionId, tenantId);
 
-      // Auto-extract memories from the completed conversation (non-fatal)
-      summarizerService.extractAndSave({
-        executionId,
-        tenantId,
-        userId,
-        chatId,
-      }).catch((err) => {
-        logger.warn({ err, executionId }, 'AgentRunner: memory extraction failed (non-fatal)');
-      });
+      summarizerService
+        .extractAndSave({ executionId, tenantId, userId, chatId })
+        .catch((err) => logger.warn({ err, executionId }, 'Memory extraction failed'));
 
-      // Prune intermediate checkpoints for this completed execution
       await checkpointService.prune(executionId).catch((err) => {
-        logger.warn({ err, executionId }, 'AgentRunner: checkpoint pruning failed (non-fatal)');
+        logger.warn({ err, executionId }, 'Checkpoint pruning failed');
       });
 
       logger.info({ executionId, loopCount: currentState.loopCount }, 'AgentRunner: completed');
@@ -217,54 +159,31 @@ export class AgentRunnerService {
         throw err;
       }
 
-      // Approval pause: the act node needs human sign-off.
-      // Save a checkpoint (already done by stream loop above the throw),
-      // update execution status, and release the worker without retrying.
       if (err instanceof ApprovalRequiredError) {
-        logger.info(
-          { executionId, approvalId: err.approvalId },
-          'AgentRunner: paused for approval — releasing worker',
-        );
-        // Status transition and event already done inside approvalService.createApproval().
-        // BullMQ should NOT retry this — mark as non-retryable by re-throwing.
+        logger.info({ executionId, approvalId: err.approvalId }, 'AgentRunner: paused for approval');
         throw err;
       }
 
-      logger.error({ err, executionId }, 'AgentRunner: execution failed');
+      logger.error({ err, executionId }, 'AgentRunner: failed');
 
       await prisma.execution.update({
         where: { id: executionId },
-        data: {
-          status: ExecutionStatus.FAILED,
-          finishedAt: new Date(),
-          error: { message: err.message ?? 'Unknown error', stack: err.stack },
-        },
+        data: { status: ExecutionStatus.FAILED, finishedAt: new Date(), error: { message: err.message, stack: err.stack } },
       });
 
-      await eventsService.appendEvent(tenantId, chatId, executionId, 'FAILED', {
-        error: err.message ?? 'Unknown error',
-      });
-
+      await eventsService.appendEvent(tenantId, chatId, executionId, 'FAILED', { error: err.message });
       throw err;
     }
   }
 
-  private async handleCancel(
-    executionId: string,
-    tenantId: string,
-    chatId: string,
-  ): Promise<void> {
+  private async handleCancel(executionId: string, tenantId: string, chatId: string): Promise<void> {
     await prisma.execution.update({
       where: { id: executionId },
       data: { status: ExecutionStatus.CANCELLED, finishedAt: new Date() },
     });
-
-    await eventsService.appendEvent(tenantId, chatId, executionId, 'CANCELLED', {
-      reason: 'Cancellation requested',
-    });
-
-    await cancellationService.clearCancel(executionId);
-    logger.info({ executionId }, 'AgentRunner: execution cancelled');
+    await eventsService.appendEvent(tenantId, chatId, executionId, 'CANCELLED', { reason: 'Cancellation requested' });
+    await cancellationService.clearCancel(executionId, tenantId);
+    logger.info({ executionId }, 'AgentRunner: cancelled');
   }
 }
 
