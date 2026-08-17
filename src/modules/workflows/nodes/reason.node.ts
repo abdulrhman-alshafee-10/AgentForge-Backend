@@ -1,5 +1,5 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
+import { SystemMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
 import { toolRegistry } from '../../tools/tool-registry.js';
 import { eventsService } from '../../executions/events.service.js';
 import { env } from '../../../config/env.js';

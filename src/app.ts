@@ -98,13 +98,13 @@ export function createApp(): express.Application {
   // and GET /executions/:id/stream (SSE). All live under /executions.
   v1.use('/executions', executionsRouter);
   v1.use('/executions', streamingRouter);
+  v1.use('/executions', checkpointsRouter);
   v1.use('/agents', agentsRouter);
   v1.use('/tools', toolsRouter);
   v1.use('/workflows', workflowsRouter);
   v1.use('/memory', memoryRouter);
   v1.use('/documents', documentsRouter);
   v1.use('/rag', ragRouter);
-  v1.use('/checkpoints', checkpointsRouter);
   v1.use('/approvals', approvalsRouter);
   v1.use('/tenants', tenantsRouter);
 

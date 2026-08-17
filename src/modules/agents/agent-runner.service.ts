@@ -1,16 +1,14 @@
 import { prisma } from '../../db/prisma.js';
 import { eventsService } from '../executions/events.service.js';
 import { cancellationService } from '../executions/cancellation.service.js';
-import { buildResearchV1Graph } from '../workflows/research-v1.graph.js';
+import { checkpointService } from '../checkpoints/checkpoint.service.js';
+import { buildResearchV1Graph, NODE } from '../workflows/research-v1.graph.js';
 import { createInitialState } from '../workflows/workflow.types.js';
 import { MessageRole, ExecutionStatus } from '@prisma/client';
 import { logger } from '../../common/logger/logger.js';
+import type { AgentState } from '../workflows/workflow.types.js';
 
 // ─── Sentinel error for clean cancellation ────────────────────────────────────
-//
-// Thrown when a cancel flag is detected.  The BullMQ worker catches this
-// specific type and marks the job as non-retryable so it is moved straight
-// to the failed set (not retried — the execution was intentionally stopped).
 
 export class ExecutionCancelledError extends Error {
   readonly isNonRetryable = true;
@@ -24,7 +22,7 @@ export class ExecutionCancelledError extends Error {
 
 export class AgentRunnerService {
   async run(executionId: string): Promise<void> {
-    // ── 1. Load execution + agent + input message ──────────────────────────
+    // ── 1. Load execution ──────────────────────────────────────────────────
     const execution = await prisma.execution.findUnique({
       where: { id: executionId },
       include: { agent: true, inputMessage: true },
@@ -35,43 +33,58 @@ export class AgentRunnerService {
       return;
     }
 
-    // Idempotency: if another worker already picked this up, skip.
-    if (execution.status !== ExecutionStatus.CREATED) {
+    const { tenantId, chatId, userId, agentId, agent, inputMessage } = execution;
+
+    // ── 2. Check if already processed ─────────────────────────────────────
+    // Allow RUNNING too — that means a previous worker attempt was interrupted.
+    // We'll resume from the latest checkpoint.
+    const isResumable = ['CREATED', 'RUNNING'].includes(execution.status);
+    if (!isResumable) {
       logger.warn(
         { executionId, status: execution.status },
-        'AgentRunner: execution already processed — skipping',
+        'AgentRunner: execution is terminal — skipping',
       );
       return;
     }
 
-    const { tenantId, chatId, userId, agentId, agent, inputMessage } = execution;
-    const input = inputMessage.content;
-
-    // ── 2. Pre-flight cancel check ─────────────────────────────────────────
+    // ── 3. Pre-flight cancel check ─────────────────────────────────────────
     if (await cancellationService.isCancelled(executionId)) {
       logger.info({ executionId }, 'AgentRunner: cancelled before start');
       await this.handleCancel(executionId, tenantId, chatId);
       return;
     }
 
-    // ── 3. Mark RUNNING ────────────────────────────────────────────────────
+    // ── 4. Mark RUNNING (idempotent update) ───────────────────────────────
     await prisma.execution.update({
       where: { id: executionId },
       data: { status: ExecutionStatus.RUNNING, startedAt: new Date() },
     });
 
-    await eventsService.appendEvent(tenantId, chatId, executionId, 'STARTED', {
-      agentId,
-      model: agent.model,
-    });
+    // ── 5. Load latest checkpoint or build fresh state ────────────────────
+    const input = inputMessage.content;
+    let initialState: AgentState;
+    let resumeFromNode: string | null = null;
+    let parentCheckpointId: string | undefined;
 
-    logger.info({ executionId, agentId, model: agent.model }, 'AgentRunner: starting');
+    const saved = await checkpointService.loadLatest(executionId);
 
-    // ── 4. Run the graph ────────────────────────────────────────────────────
-    try {
-      const graph = buildResearchV1Graph();
+    if (saved) {
+      // Resume: reuse checkpointed state, skip to the node after the last one saved
+      initialState = saved.state;
+      resumeFromNode = saved.checkpoint.nodeName;
+      parentCheckpointId = saved.checkpoint.id;
+      logger.info(
+        { executionId, resumeFromNode },
+        'AgentRunner: resuming from checkpoint',
+      );
 
-      const initialState = createInitialState({
+      await eventsService.appendEvent(tenantId, chatId, executionId, 'RESUMED', {
+        fromNode: resumeFromNode,
+        checkpointId: saved.checkpoint.id,
+      });
+    } else {
+      // Fresh run
+      initialState = createInitialState({
         input,
         tenantId,
         userId,
@@ -83,39 +96,71 @@ export class AgentRunnerService {
         temperature: Number(agent.temperature),
       });
 
-      // LangGraph doesn't have native cancel support, so we wrap invoke in a
-      // cancellation race.  Between-node checks happen inside the nodes
-      // themselves via cancellationService.isCancelled().
-      const cancelRace = new Promise<never>((_, reject) => {
-        const interval = setInterval(async () => {
-          if (await cancellationService.isCancelled(executionId)) {
-            clearInterval(interval);
-            reject(new ExecutionCancelledError(executionId));
-          }
-        }, 1_000); // poll every second
-        // Store interval ref on the promise so we can cancel it on completion
-        (cancelRace as any).__interval = interval;
+      await eventsService.appendEvent(tenantId, chatId, executionId, 'STARTED', {
+        agentId,
+        model: agent.model,
       });
 
-      let finalState: typeof initialState;
+      logger.info({ executionId, agentId, model: agent.model }, 'AgentRunner: starting fresh');
+    }
+
+    // ── 6. Run the graph with per-node checkpoint saves ────────────────────
+    try {
+      const graph = buildResearchV1Graph();
+
+      // Use stream() to get per-node output so we can save checkpoints between nodes.
+      // stream() yields objects of the shape { [nodeName]: partialState }
+      const stream = await graph.stream(initialState as any, {
+        streamMode: 'updates',
+      });
+
+      // Track the accumulated state as nodes complete
+      let currentState: AgentState = { ...initialState };
+
+      // Cancel polling
+      let cancelled = false;
+      const cancelPoll = setInterval(async () => {
+        if (await cancellationService.isCancelled(executionId)) {
+          cancelled = true;
+        }
+      }, 1_000);
+
       try {
-        finalState = await Promise.race([
-          graph.invoke(initialState as any).then((s) => s as typeof initialState),
-          cancelRace,
-        ]);
+        for await (const update of stream) {
+          // Cancel check between nodes
+          if (cancelled) {
+            throw new ExecutionCancelledError(executionId);
+          }
+
+          // `update` is { nodeName: partialState }
+          const [nodeName, nodeOutput] = Object.entries(update)[0] as [string, Partial<AgentState>];
+
+          // Merge output into current state
+          currentState = { ...currentState, ...nodeOutput };
+
+          // Save checkpoint after this node
+          const cp = await checkpointService.save(
+            tenantId,
+            executionId,
+            nodeName,
+            currentState,
+            parentCheckpointId,
+          );
+          if (cp) parentCheckpointId = cp.id;
+
+          logger.debug({ executionId, nodeName }, 'AgentRunner: node complete');
+        }
       } finally {
-        // Always clear the polling interval
-        const interval = (cancelRace as any).__interval;
-        if (interval) clearInterval(interval);
+        clearInterval(cancelPoll);
       }
 
-      if (finalState.error) {
-        throw new Error(finalState.error);
+      if (currentState.error) {
+        throw new Error(currentState.error);
       }
 
-      const responseText = finalState.response ?? '(no response)';
+      const responseText = currentState.response ?? '(no response)';
 
-      // ── 5. Persist assistant message ─────────────────────────────────────
+      // ── 7. Persist assistant message ─────────────────────────────────────
       const outputMessage = await prisma.message.create({
         data: {
           tenantId,
@@ -125,8 +170,8 @@ export class AgentRunnerService {
           content: responseText,
           metadata: {
             model: agent.model,
-            loopCount: finalState.loopCount,
-            toolsUsed: finalState.toolResults.map((t) => t.toolName),
+            loopCount: currentState.loopCount,
+            toolsUsed: currentState.toolResults.map((t) => t.toolName),
           },
         },
       });
@@ -143,16 +188,22 @@ export class AgentRunnerService {
 
       await eventsService.appendEvent(tenantId, chatId, executionId, 'COMPLETED', {
         outputMessageId: outputMessage.id,
-        loopCount: finalState.loopCount,
-        toolsUsed: finalState.toolResults.length,
+        loopCount: currentState.loopCount,
+        toolsUsed: currentState.toolResults.length,
       });
 
       await cancellationService.clearCancel(executionId);
-      logger.info({ executionId, loopCount: finalState.loopCount }, 'AgentRunner: completed');
+
+      // Prune intermediate checkpoints for this completed execution
+      await checkpointService.prune(executionId).catch((err) => {
+        logger.warn({ err, executionId }, 'AgentRunner: checkpoint pruning failed (non-fatal)');
+      });
+
+      logger.info({ executionId, loopCount: currentState.loopCount }, 'AgentRunner: completed');
     } catch (err: any) {
       if (err instanceof ExecutionCancelledError) {
         await this.handleCancel(executionId, tenantId, chatId);
-        throw err; // re-throw so BullMQ marks the job non-retryable
+        throw err;
       }
 
       logger.error({ err, executionId }, 'AgentRunner: execution failed');
@@ -170,7 +221,7 @@ export class AgentRunnerService {
         error: err.message ?? 'Unknown error',
       });
 
-      throw err; // re-throw so BullMQ retries
+      throw err;
     }
   }
 

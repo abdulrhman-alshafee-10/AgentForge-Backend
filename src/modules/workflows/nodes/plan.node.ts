@@ -20,7 +20,7 @@ Respond in this exact JSON format (no markdown, no explanation):
 {"plan": "<your plan>", "needsRetrieval": true|false}`;
 
 export async function planNode(state: AgentState): Promise<Partial<AgentState>> {
-  const { tenantId, executionId, input, systemPrompt, model, temperature } = state;
+  const { tenantId, executionId, input, model, temperature } = state;
 
   await eventsService.appendEvent(tenantId, state.chatId, executionId, 'PLANNING', {
     input,
