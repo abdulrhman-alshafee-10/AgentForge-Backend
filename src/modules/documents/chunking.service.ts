@@ -50,11 +50,14 @@ export class ChunkingService {
 
   private applyOverlap(chunks: string[]): string[] {
     if (chunks.length <= 1) return chunks;
-    
-    const overlapped: string[] = [chunks[0]];
+
+    const first = chunks[0];
+    if (first === undefined) return chunks;
+
+    const overlapped: string[] = [first];
     for (let i = 1; i < chunks.length; i++) {
-      const prev = chunks[i - 1] || '';
-      const curr = chunks[i];
+      const prev = chunks[i - 1] ?? '';
+      const curr = chunks[i] ?? '';
       const overlapText = prev.slice(-this.chunkOverlap);
       overlapped.push(overlapText + curr);
     }

@@ -6,34 +6,40 @@ export class EmbeddingsProvider {
   private client: OpenAI;
 
   constructor() {
+    // The OpenAI SDK is reused as a Ollama-compatible client.
+    // Local Ollama serves an OpenAI-compatible API at /v1 by default.
     this.client = new OpenAI({
-      baseURL: 'https://ollama.com/api',
+      baseURL: env.OLLAMA_BASE_URL,
       apiKey: env.OLLAMA_API_KEY,
     });
   }
 
   /**
    * Generates embeddings for a batch of text chunks.
+   * Ollama's nomic-embed-text model outputs 768-dimensional vectors.
    */
   async embedBatch(chunks: string[]): Promise<number[][]> {
     try {
       const response = await this.client.embeddings.create({
-        model: 'nomic-embed-text', // Outputs 768 dimensions by default
+        model: env.OLLAMA_EMBED_MODEL,
         input: chunks,
       });
 
       return response.data.map((d) => d.embedding);
     } catch (err: any) {
-      throw new AppError('DEPENDENCY_UNAVAILABLE', `Embedding failed: ${err.message}`, 503);
+      // AppError(message, statusCode, code)
+      throw new AppError(`Embedding failed: ${err.message}`, 503, 'DEPENDENCY_UNAVAILABLE');
     }
   }
 
   /**
-   * Generates an embedding for a single text chunk.
+   * Generates an embedding for a single query string.
    */
   async embedQuery(query: string): Promise<number[]> {
     const embeddings = await this.embedBatch([query]);
-    return embeddings[0] as number[];
+    const first = embeddings[0];
+    if (!first) throw new AppError('Embedding returned empty result', 503, 'DEPENDENCY_UNAVAILABLE');
+    return first;
   }
 }
 

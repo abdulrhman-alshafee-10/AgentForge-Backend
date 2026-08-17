@@ -2,27 +2,39 @@ import { embeddingsProvider } from '../vector-store/embeddings.provider.js';
 import { vectorStoreService, type SimilaritySearchResult } from '../vector-store/vector-store.service.js';
 import { logger } from '../../common/logger/logger.js';
 
+export interface RetrieveContextOptions {
+  tenantId: string;
+  query: string;
+  /** Number of chunks to return (default: 4) */
+  k?: number;
+  /** Optional: restrict retrieval to a specific document */
+  documentId?: string;
+}
+
 export class RagService {
   /**
-   * Retrieves relevant context for a given query, scoped to the tenant.
-   * Orchestrates query embedding and vector similarity search.
+   * Retrieves the most relevant context chunks for a given query.
+   *
+   * Pipeline:
+   *  1. Embed the query using the configured model.
+   *  2. Run a cosine similarity search scoped to the tenant.
+   *  3. Return results ordered by relevance (ascending distance).
    */
-  async retrieveContext(
-    tenantId: string,
-    query: string,
-    k: number = 4,
-  ): Promise<SimilaritySearchResult[]> {
-    logger.info({ tenantId, query, k }, 'Retrieving context for query');
+  async retrieveContext(options: RetrieveContextOptions): Promise<SimilaritySearchResult[]> {
+    const { tenantId, query, k = 4, documentId } = options;
 
-    // 1. Embed the user's query
+    logger.debug({ tenantId, k, documentId }, 'RAG: retrieving context');
+
     const queryVector = await embeddingsProvider.embedQuery(query);
 
-    // 2. Perform similarity search in the vector store
-    const results = await vectorStoreService.similaritySearch(tenantId, queryVector, k);
+    const results = await vectorStoreService.similaritySearch({
+      tenantId,
+      queryVector,
+      k,
+      ...(documentId !== undefined && { documentId }),
+    });
 
-    logger.info({ tenantId, found: results.length }, 'Context retrieval complete');
-    
-    // Note: We could add an optional re-ranking step here using a cross-encoder
+    logger.debug({ tenantId, found: results.length }, 'RAG: context retrieval complete');
 
     return results;
   }

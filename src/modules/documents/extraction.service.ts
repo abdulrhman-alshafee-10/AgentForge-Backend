@@ -15,7 +15,8 @@ export class ExtractionService {
       case 'text/csv':
         return buffer.toString('utf-8');
       default:
-        throw new AppError('UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${mimeType}`, 415);
+        // AppError(message, statusCode, code)
+        throw new AppError(`Unsupported file type: ${mimeType}`, 415, 'UNSUPPORTED_MEDIA_TYPE');
     }
   }
 
@@ -24,7 +25,7 @@ export class ExtractionService {
       const data = await pdfParse(buffer);
       return data.text;
     } catch (err) {
-      throw new AppError('SEMANTIC_ERROR', 'Failed to extract text from PDF', 422);
+      throw new AppError('Failed to extract text from PDF', 422, 'SEMANTIC_ERROR');
     }
   }
 }
